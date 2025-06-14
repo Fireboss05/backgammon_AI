@@ -1,11 +1,13 @@
 # Play backgammon
 from src.compare_all_moves_strategy import CompareAllMovesWeightingDistance, CompareAllMovesWeightingDistanceAndSingles
 from src.experiment import Experiment
+from src.strategies import MoveFurthestBackStrategy
+from src.compare_all_moves_strategy import CompareAllMovesSimple
 
 experiment = Experiment(
     games_to_play=100,
     white_strategy=MoveFurthestBackStrategy(),
-    black_strategy=CompareAllMoves()
+    black_strategy=CompareAllMovesSimple()
 )
 if __name__ == '__main__':
     experiment.run()

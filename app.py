@@ -1,8 +1,9 @@
 import queue
 import threading
+import json
 import time
 
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_cors import CORS, cross_origin
 
 from src.board import Board
@@ -224,3 +225,114 @@ def new_game():
     response = move_results.get()
     print('[API]: ...got result, responding to frontend')
     return get_state(response)
+
+@app.route('/get-possible-moves', methods=['POST'])
+@cross_origin()
+def get_possible_moves():
+    print('[API]: get-possible-moves called')
+    data = request.get_json()
+
+    board_data = data.get("board")
+    colour = Colour.load(data.get("colour").lower())
+    dice_rolls = data.get("dice_roll")  # ex: [5], [3,3,3,3], etc.
+
+    # Reconstruire un Board à partir du dict
+    board = Board.reconstruct_board_from_data(board_data)
+
+    bar_location = 0 if colour == Colour.WHITE else 25
+    has_piece_on_zero = any(piece.location == bar_location for piece in board.get_pieces(colour))
+
+    seen_moves = set()
+
+    # Formatage du résultat : list of dicts
+    response = []
+
+    for die_roll in dice_rolls:
+        for piece in board.get_pieces(colour):
+            if has_piece_on_zero and piece.location != bar_location:
+                continue  # On ignore tous les pions sauf ceux en 0
+
+            if board.is_move_possible(piece, die_roll):
+                move_key = (piece.location, die_roll)
+                if move_key not in seen_moves:
+                    seen_moves.add(move_key)
+                    response.append({
+                        "from": piece.location,
+                        "die_roll": die_roll
+                    })
+
+    return jsonify(response)
+
+@app.route('/simul-move', methods=['POST'])
+@cross_origin()
+def simul_moves():
+    print('[API]: simul-move called')
+    data = request.get_json()
+
+    board_data = data.get("board")
+    die_data = data.get("die")
+    location_data = data.get("location")
+
+    # Reconstruire un Board à partir du dict
+    board = Board.reconstruct_board_from_data(board_data)
+    
+    new_board = board.simul_move(location_data, die_data)
+
+    board_json_str = new_board.to_json()  # renvoie JSON string
+    board_dict = json.loads(board_json_str)  # parse en dict Python
+
+    # Retourner dict complet comme dans get_state
+    response = {
+        'board': board_dict,
+        # tu peux ajouter d'autres infos si besoin, par exemple:
+        # 'dice_roll': [...], 'used_rolls': [...], 'player_can_move': ...
+    }
+
+    return response
+
+@app.route('/simul-multi-move', methods=['POST'])
+@cross_origin()
+def simul_multi_moves():
+    print('[API]: simul-move called')
+    data = request.get_json()
+
+    board_data = data.get("board")
+    moves_data = data.get("moves")
+
+    # Reconstruire un Board à partir du dict
+    board = Board.reconstruct_board_from_data(board_data)
+    
+    responses = []
+
+    for move in moves_data:
+        die = move.get("die_roll")
+        location = move.get("from")
+
+        if die is None or location is None:
+            continue  # ou return error 400 if you prefer stricter validation
+
+        try:
+            # Important : clone le board avant de simuler
+            new_board = board.simul_move(location, die)
+
+            board_json_str = new_board.to_json()  # renvoie JSON string
+            board_dict = json.loads(board_json_str)
+            responses.append({
+                "board":board_dict
+            })
+
+        except Exception as e:
+            # responses.append({
+            #     "error": f"Invalid move from {location} with die {die}: {str(e)}"
+            # })
+            new_board = board.create_copy()
+            board_json_str = new_board.to_json()  # renvoie JSON string
+            board_dict = json.loads(board_json_str)
+            responses.append({
+                "board":board
+            })
+
+    return jsonify(responses)
+
+if __name__ == '__main__':
+    app.run(debug=False, host='0.0.0.0', port=5000)

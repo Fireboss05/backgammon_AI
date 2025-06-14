@@ -31,6 +31,7 @@ export class BoardComponent extends React.Component<{}, State> {
     private readonly backendurl = 'http://localhost:5000'
     private readonly audioDiceRoll = new Audio(`${process.env.PUBLIC_URL}/dice-roll.mp3`);
     private readonly audioPieceMove = new Audio(`${process.env.PUBLIC_URL}/piece-move.mp3`);
+    private pollingInterval?: NodeJS.Timeout;
     constructor(props: any) {
         super(props);
         this.state = {
@@ -136,7 +137,7 @@ export class BoardComponent extends React.Component<{}, State> {
         })
     }
 
-    componentDidMount() {
+    /*componentDidMount() {
         fetch(`${this.backendurl}/start-game`)
             .then(res => res.json())
             .then(
@@ -149,7 +150,37 @@ export class BoardComponent extends React.Component<{}, State> {
                     });
                 },
             )
+    }*/
+    componentDidMount() {
+        this.fetchBoardState();
+    
+        this.pollingInterval = setInterval(() => {
+            this.fetchBoardState();
+        }, 100);
     }
+    
+    componentWillUnmount() {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+        }
+    }
+    
+    private fetchBoardState = async () => {
+        try {
+            const response = await fetch(`${this.backendurl}/start-game`);
+            const result = await response.json();
+            this.setState({
+                piecesByLocation: JSON.parse(result.board),
+                diceRoll: result.dice_roll,
+                usedRolls: result.used_rolls,
+                winner: result.winner,
+                computersGo: false,   // ou selon ta logique
+                playerCanMove: true,  // idem
+            });
+        } catch (error) {
+            console.error("Erreur fetchBoardState:", error);
+        }
+    };
 
     private locationToPosition(location: number, i: number, count: number): [number, number] {
 

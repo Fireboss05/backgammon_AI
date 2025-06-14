@@ -11,6 +11,16 @@ class Board:
         self.__pieces = []
 
     @classmethod
+    def reconstruct_board_from_data(cls,board_dict):
+        board = Board()
+        for pos_str, data in board_dict.items():
+            location = int(pos_str)
+            colour = data['colour']
+            count = data['count']
+            board.add_many_pieces(count, Colour.load(colour), location)
+        return board
+
+    @classmethod
     def create_starting_board(cls):
         board = Board()
         board.add_many_pieces(2, Colour.WHITE, 1)
@@ -45,6 +55,15 @@ class Board:
         if len(pieces_at_new_location) == 0 or len(pieces_at_new_location) == 1:
             return True
         return self.pieces_at(new_location)[0].colour == piece.colour
+    
+    def all_posssible_move(self, colour, die_roll):
+        possible_moves = []
+        pieces = self.get_pieces(colour)
+        for p in pieces:
+            if self.is_move_possible(p, die_roll):
+                possible_moves.append((p.location, die_roll))
+        return possible_moves
+            
 
     def no_moves_possible(self, colour, dice_roll):
         piece_locations = [x.location for x in self.get_pieces(colour)]
@@ -85,6 +104,12 @@ class Board:
 
         piece.location = new_location
         return new_location
+    
+    def simul_move(self, location_data, die_data):
+        new_board = self.create_copy()
+        piece = new_board.get_piece_at(location_data)
+        new_location = new_board.move_piece(piece, die_data)
+        return new_board
 
     def pieces_at(self, location):
         return [x for x in self.__pieces if x.location == location]
