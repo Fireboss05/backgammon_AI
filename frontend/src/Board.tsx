@@ -383,6 +383,9 @@ export class BoardComponent extends React.Component<{}, State> {
                     <option value="medium">Medium</option>
                     <option value="hard">Hard</option>
                     <option value="veryhard">Very Hard</option>
+                    <option value="expectiminimax">Expectiminimax</option>
+                    <option value="*-minimax">*-minimax</option>
+                    {/* <option value="mcgammon">MCGammon</option> */}
                 </select>
             </div>
         )

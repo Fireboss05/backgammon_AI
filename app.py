@@ -6,6 +6,8 @@ import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS, cross_origin
 
+from src.launch_java_AI import launch_java_game
+from src.move_not_possible_exception import MoveNotPossibleException
 from src.board import Board
 from src.colour import Colour
 from src.compare_all_moves_strategy import CompareAllMovesSimple, \
@@ -17,15 +19,26 @@ from src.game import Game
 from random import randint
 from src.strategies import Strategy
 
+import logging
+
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 app = Flask(__name__)
 cors = CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
 moves_to_make = queue.Queue()
 move_results = queue.Queue()
+
+black_moves_to_make = queue.Queue()
+black_move_results = queue.Queue()
+
 current_board = []
 current_roll = []
 used_die_rolls = []
+
+to_play = -1
 
 
 def set_current_move(dice_roll):
@@ -43,6 +56,9 @@ def game_thread(difficulty):
 
         def move(self, board, colour, dice_roll, make_move, opponents_activity):
             set_current_move(dice_roll.copy())
+
+            global to_play
+            to_play = colour
 
             board_json_before_opp_move = self.board_after_your_last_turn.to_json()
 
@@ -114,6 +130,66 @@ def game_thread(difficulty):
                 'board_after_your_last_turn': board_json_before_opp_move,
             })
 
+    class ApiBlackStrategy(Strategy):
+
+        def __init__(self) -> None:
+            self.board_after_your_last_turn = Board.create_starting_board()
+
+        def move(self, board, colour, dice_roll, make_move, opponents_activity):
+            set_current_move(dice_roll.copy())
+
+            global to_play
+            to_play = colour
+
+            board_json_before_opp_move = self.board_after_your_last_turn.to_json()
+
+            def map_move(move):
+                self.board_after_your_last_turn.move_piece(
+                    self.board_after_your_last_turn.get_piece_at(move['start_location']),
+                    move['die_roll']
+                )
+                move['board_after_move'] = self.board_after_your_last_turn.to_json()
+                return move
+
+            print('[Game]: Sending opponents activity (end of previous turn, start of new turn)')
+            black_move_results.put({
+                'result': 'success',
+                'opponents_activity': {
+                    'opponents_move': [map_move(move) for move in opponents_activity['opponents_move']],
+                    'dice_roll': opponents_activity['dice_roll'],
+                },
+                'board_after_your_last_turn': board_json_before_opp_move,
+            })
+            while len(dice_roll) > 0:
+                print('[Game]: Waiting for black_moves_to_make...')
+                move = black_moves_to_make.get()
+                if move == 'end_game':
+                    print('[Game]: ...got end_game, so crashing')
+                    raise Exception("Game ended")
+                elif move == 'end_turn':
+                    print('[Game]: ...got end_turn')
+                    break
+                print('[Game]: ...got move')
+                try:
+                    rolls_moved = make_move(move['location'], move['die_roll'])
+                    for roll in rolls_moved:
+                        dice_roll.remove(roll)
+                        used_die_rolls[0].append(roll)
+
+                    if len(dice_roll) > 0:
+                        print('[Game]: Sending move success (middle of go)')
+                        black_move_results.put({
+                            'result': 'success'
+                        })
+                except:
+                    print('[Game]: Sending move failed')
+                    black_move_results.put({
+                        'result': 'move_failed'
+                    })
+
+            self.board_after_your_last_turn = board.create_copy()
+            print('[Game]: Done last move of turn. Going to wait for opponent information')
+
     print(difficulty)
     if difficulty == 'veryeasy':
         opponent_strategy = MoveFurthestBackStrategy()
@@ -125,6 +201,19 @@ def game_thread(difficulty):
         opponent_strategy = CompareAllMovesWeightingDistanceAndSinglesWithEndGame()
     elif difficulty == 'veryhard':
         opponent_strategy = CompareAllMovesWeightingDistanceAndSinglesWithEndGame2()
+    elif difficulty == "expectiminimax":
+        opponent_strategy = ApiBlackStrategy()
+        thread = threading.Thread(target=launch_java_game, args=(1, "black", "expectiminimax"))
+        thread.start()
+    elif difficulty == "*-minimax":
+        opponent_strategy = ApiBlackStrategy()
+        thread = threading.Thread(target=launch_java_game, args=(2, "black", "*-minimax"))
+        thread.start()
+    elif difficulty == "mcgammon":
+        opponent_strategy = ApiBlackStrategy()
+        # thread = threading.Thread(target=launch_java_game, args=(1, "black", "mcgammon"))
+        # thread.start()
+
     else:
         raise Exception('Not a valid strategy')
 
@@ -149,13 +238,23 @@ def game_thread(difficulty):
             move_results.put({
                         'result': 'move_failed'
                     })
+        if black_moves_to_make.get() == 'end_game':
+            print('[Game] ... got end_game (in final bit)')
+            break
+        else:
+            print('[Game] ... got non-end_game (in final bit)')
+            black_move_results.put({
+                        'result': 'move_failed'
+                    })
 
 
-def get_state(response={}):
+
+def get_state(response={}, colour=Colour.WHITE):
     if len(current_board) == 0:
         return {'board': "{}", 'dice_roll': [], 'used_rolls': []}
     board = current_board[0]
     move = current_roll[0]
+
     moves_left = move.copy()
     for used_move in used_die_rolls[0]:
         moves_left.remove(used_move)
@@ -163,7 +262,8 @@ def get_state(response={}):
     state = {'board': board.to_json(),
              'dice_roll': move,
              'used_rolls': used_die_rolls[0],
-             'player_can_move': not board.no_moves_possible(Colour.WHITE, moves_left)}
+             'player_can_move': not board.no_moves_possible(colour, moves_left),
+             'to_play':to_play.value}
     if board.has_game_ended():
         state['winner'] = str(board.who_won())
     if 'opponents_activity' in response:
@@ -175,6 +275,7 @@ def get_state(response={}):
         state['board_after_your_last_turn'] = response['board_after_your_last_turn']
     if 'result' in response:
         state['result'] = response['result']
+
     return state
 
 
@@ -183,29 +284,67 @@ def get_state(response={}):
 def start_game():
     return get_state()
 
+@app.route('/black/start-game')
+@cross_origin()
+def black_start_game():
+    return get_state(colour=Colour.BLACK)
+
 
 @app.route('/move-piece')
 @cross_origin()
 def move_piece():
     print('[API]: move-piece called')
-    location = request.args.get('location', default=1, type=int)
-    die_roll = request.args.get('die-roll', default=1, type=int)
-    end_turn = request.args.get('end-turn', default='', type=str)
-    print(end_turn)
-    if end_turn == 'true':
-        print('[API]: Sending end_turn...')
-        moves_to_make.put('end_turn')
+    if to_play.value == 0:
+        location = request.args.get('location', default=1, type=int)
+        die_roll = request.args.get('die-roll', default=1, type=int)
+        end_turn = request.args.get('end-turn', default='', type=str)
+        print(end_turn)
+        if end_turn == 'true':
+            print('[API]: Sending end_turn...')
+            moves_to_make.put('end_turn')
+        else:
+            print('[API]: Sending moves_to_make...')
+            moves_to_make.put({
+                'location': location,
+                'die_roll': die_roll
+            })
+        print('[API]: Waiting for move_results...')
+        response = move_results.get()
+        print('[API]: ...got result, responding to frontend')
+        return get_state(response)
     else:
-        print('[API]: Sending moves_to_make...')
-        moves_to_make.put({
-            'location': location,
-            'die_roll': die_roll
-        })
-    print('[API]: Waiting for move_results...')
-    response = move_results.get()
-    print('[API]: ...got result, responding to frontend')
-    return get_state(response)
+        return {
+            "error": "not your turn",
+            "your_turn": False
+        }, 403
 
+@app.route('/black/move-piece')
+@cross_origin()
+def black_move_piece():
+    print('[API]: black-move-piece called')
+    if to_play.value == 1:
+        location = request.args.get('location', default=1, type=int)
+        die_roll = request.args.get('die-roll', default=1, type=int)
+        end_turn = request.args.get('end-turn', default='', type=str)
+        print(end_turn)
+        if end_turn == 'true':
+            print('[API]: Sending end_turn...')
+            black_moves_to_make.put('end_turn')
+        else:
+            print('[API]: Sending moves_to_make...')
+            black_moves_to_make.put({
+                'location': location,
+                'die_roll': die_roll
+            })
+        print('[API]: Waiting for move_results...')
+        response = black_move_results.get()
+        print('[API]: ...got result, responding to frontend')
+        return get_state(response)
+    else:
+        return {
+            "error": "not your turn",
+            "your_turn": False
+        }, 403
 
 @app.route('/new-game')
 @cross_origin()
@@ -216,6 +355,7 @@ def new_game():
     if len(current_board) != 0:
         print('[API]: Sending end_game')
         moves_to_make.put('end_game')
+        black_moves_to_make.put('end_game')
     current_board.clear()
     current_roll.clear()
     time.sleep(1)
